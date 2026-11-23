@@ -1,21 +1,10 @@
-"""
-ELYirs - Traductor de Python a Ensamblador
-Programación de Sistemas de Base 1 - Grupo K
 
-main.py
-Punto de entrada del analizador léxico: lee un archivo .py (o usa un
-código de ejemplo), lo tokeniza y muestra un reporte por consola.
-
-Uso:
-    python main.py                 # usa el código de ejemplo incluido
-    python main.py mi_archivo.py   # tokeniza el archivo indicado
-"""
-
-import sys
+import argparse
 
 from Scanner import Scanner
 from Token import Token
-from ErrorHandler import ErrorManager
+from ErrorHandler import ErrorManager, FaseError
+from SymbolTable import TablaSimbolos
 
 CODIGO_EJEMPLO = '''\
 # Programa de ejemplo para probar el scanner
@@ -40,57 +29,67 @@ if __name__ == "__main__":
     print(mensaje)
 '''
 
-
 def leer_fuente(ruta: str) -> str:
     with open(ruta, "r", encoding="utf-8") as f:
         return f.read()
-
 
 def imprimir_reporte(tokens: list[Token]) -> None:
     encabezado = f"{'LINEA':<6}{'COL':<5}{'TIPO':<22}{'CATEGORIA':<20}{'LEXEMA':<30}VALOR"
     print(encabezado)
     print("-" * len(encabezado))
     for tok in tokens:
-        if tok.is_any(*[]):
-            continue
         lexema = tok.lexema.replace("\n", "\\n")
         if len(lexema) > 28:
             lexema = lexema[:25] + "..."
         print(f"{tok.linea:<6}{tok.columna:<5}{tok.type.name:<22}{tok.categoria():<20}"
               f"{lexema:<30}{tok.value!r}")
 
-
-def imprimir_errores(tokens: list[Token]) -> None:
-    errores = [t for t in tokens if t.is_error()]
-    print(f"\n{'='*60}")
-    if not errores:
-        print("No se encontraron errores léxicos.")
-    else:
-        print(f"Se encontraron {len(errores)} error(es) léxico(s):")
-        for err in errores:
-            print(f"  linea {err.linea}, col {err.columna}: {err.type.name} -> {err.lexema!r}")
-    print(f"{'='*60}")
-
-
 def main() -> None:
-    if len(sys.argv) > 1:
-        codigo = leer_fuente(sys.argv[1])
-        origen = sys.argv[1]
+    ap = argparse.ArgumentParser(description="Front-End de ELYirs: léxico + tabla de símbolos")
+    ap.add_argument("archivo", nargs="?",
+                    help="archivo a analizar (si no se indica, usa el ejemplo incluido)")
+    ap.add_argument("--solo-lexico", action="store_true",
+                    help="no construye la tabla de símbolos")
+    ap.add_argument("--completa", action="store_true",
+                    help="en la tabla, muestra también los predefinidos que el código no usa")
+    ap.add_argument("--csv", metavar="SALIDA.csv", help="exporta la tabla de símbolos a CSV")
+    args = ap.parse_args()
+
+    if args.archivo:
+        try:
+            codigo = leer_fuente(args.archivo)
+        except OSError as e:
+            print(f"No se pudo abrir '{args.archivo}': {e}")
+            raise SystemExit(1)
+        origen = args.archivo
     else:
         codigo = CODIGO_EJEMPLO
         origen = "(código de ejemplo incluido)"
 
     print(f"Analizando: {origen}\n")
 
-    scanner = Scanner(codigo)
-    tokens = scanner.tokenize()
-
+    # ---------- 1. Análisis léxico ----------
+    tokens = Scanner(codigo).tokenize()
     imprimir_reporte(tokens)
     print(f"\nTotal de tokens generados: {len(tokens)}")
 
-    error_manager = ErrorManager(codigo)
-    error_manager.recolectar_errores_lexicos(tokens)
-    error_manager.imprimir_reporte()
+    gestor = ErrorManager(codigo)
+    gestor.recolectar_errores_lexicos(tokens)
+
+    # ---------- 2. Tabla de símbolos ----------
+    if not args.solo_lexico:
+        print()
+        tabla = TablaSimbolos().construir(tokens)
+        tabla.imprimir(solo_usados=not args.completa)
+        if args.csv:
+            tabla.exportar_csv(args.csv)
+            print(f"CSV exportado a {args.csv}\n")
+        for linea, columna, mensaje in sorted(tabla.incidencias):
+            gestor.agregar_error(FaseError.SEMANTICO, mensaje, linea, columna, "")
+
+    # ---------- 3. Reporte único de errores ----------
+    gestor.imprimir_reporte()
+
 
 if __name__ == "__main__":
     main()
